@@ -39,11 +39,13 @@ var boundaries = map[int]int{
 	typeInt32: 4,
 }
 
+// IndexEntry represents an RPM header index entry containing type, count, and data.
 type IndexEntry struct {
 	rpmtype, count int
 	data           []byte
 }
 
+// indexBytes returns the index bytes for this entry with the given tag and content offset.
 func (e IndexEntry) indexBytes(tag, contentOffset int) []byte {
 	b := &bytes.Buffer{}
 	if err := binary.Write(b, binary.BigEndian, []int32{int32(tag), int32(e.rpmtype), int32(contentOffset), int32(e.count)}); err != nil {
@@ -64,25 +66,37 @@ func intEntry(rpmtype, size int, value interface{}) IndexEntry {
 	return IndexEntry{rpmtype, size, b.Bytes()}
 }
 
+// EntryInt16 creates an IndexEntry from a slice of int16 values.
 func EntryInt16(value []int16) IndexEntry {
 	return intEntry(typeInt16, len(value), value)
 }
+
+// EntryUint16 creates an IndexEntry from a slice of uint16 values.
 func EntryUint16(value []uint16) IndexEntry {
 	return intEntry(typeInt16, len(value), value)
 }
+
+// EntryInt32 creates an IndexEntry from a slice of int32 values.
 func EntryInt32(value []int32) IndexEntry {
 	return intEntry(typeInt32, len(value), value)
 }
+
+// EntryUint32 creates an IndexEntry from a slice of uint32 values.
 func EntryUint32(value []uint32) IndexEntry {
 	return intEntry(typeInt32, len(value), value)
 }
+
+// EntryString creates an IndexEntry from a string value.
 func EntryString(value string) IndexEntry {
 	return IndexEntry{typeString, 1, append([]byte(value), byte(00))}
 }
+
+// EntryBytes creates an IndexEntry from a byte slice.
 func EntryBytes(value []byte) IndexEntry {
 	return IndexEntry{typeBinary, len(value), value}
 }
 
+// EntryStringSlice creates an IndexEntry from a slice of strings.
 func EntryStringSlice(value []string) IndexEntry {
 	b := [][]byte{}
 	for _, v := range value {

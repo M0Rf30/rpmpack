@@ -65,7 +65,7 @@ func FromTar(inp io.Reader, md RPMMetaData) (*RPM, error) {
 
 		r.AddFile(
 			RPMFile{
-				Name:  path.Join("/", h.Name),
+				Name:  path.Join("/", h.Name), //nolint:gosec // path.Join sanitizes traversal sequences
 				Body:  body,
 				Mode:  uint(h.Mode),
 				Owner: owner,

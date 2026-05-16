@@ -78,7 +78,6 @@ func TestFromTar(t *testing.T) {
 		wantFileModes: []uint16{040755, 0120000, 0100644},
 	}}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := FromTar(tc.input, RPMMetaData{})
 			if err != nil {

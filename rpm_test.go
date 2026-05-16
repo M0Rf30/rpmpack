@@ -5,6 +5,7 @@ import (
 	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -118,8 +119,6 @@ func TestCompression(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
-
 		for _, compressor := range testCase.Compressors {
 			t.Run(compressor, func(t *testing.T) {
 				r, err := NewRPM(RPMMetaData{
@@ -137,9 +136,9 @@ func TestCompression(t *testing.T) {
 					t.Fatalf("compressor %q should have produced an error", compressor)
 				}
 
-				if r.RPMMetaData.Compressor != testCase.Type {
-					t.Fatalf("expected compressor %q, got %q", compressor,
-						r.RPMMetaData.Compressor)
+			if r.Compressor != testCase.Type {
+				t.Fatalf("expected compressor %q, got %q", compressor,
+					r.Compressor)
 				}
 
 				expectedWriterType := reflect.Indirect(reflect.ValueOf(
@@ -190,6 +189,69 @@ func TestMinimalSpec(t *testing.T) {
 		Summary:     "test summary",
 		Description: "test description",
 		Licence:     "test license",
+	})
+	if err != nil {
+		t.Fatalf("NewRPM returned error %v", err)
+	}
+
+	var b bytes.Buffer
+	if err := r.Write(&b); err != nil {
+		t.Errorf("Write returned error %v", err)
+	}
+}
+
+func TestChangelog(t *testing.T) {
+	r, err := NewRPM(RPMMetaData{
+		Name:    "test",
+		Version: "1.0",
+		Release: "1",
+		Changelog: []ChangelogEntry{
+			{Time: time.Unix(1700000000, 0), Author: "Test User <test@example.com>", Text: "- Initial release"},
+			{Time: time.Unix(1699000000, 0), Author: "Test User <test@example.com>", Text: "- Pre-release"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRPM returned error %v", err)
+	}
+
+	var b bytes.Buffer
+	if err := r.Write(&b); err != nil {
+		t.Errorf("Write returned error %v", err)
+	}
+}
+
+func TestEnhancesSupplements(t *testing.T) {
+	r, err := NewRPM(RPMMetaData{
+		Name:    "test",
+		Version: "1.0",
+		Release: "1",
+	})
+	if err != nil {
+		t.Fatalf("NewRPM returned error %v", err)
+	}
+
+	r.Enhances = append(r.Enhances, &Relation{
+		Name:  "enhanced-package",
+		Sense: SenseEqual,
+	})
+	r.Supplements = append(r.Supplements, &Relation{
+		Name:  "supplemented-package",
+		Sense: SenseEqual,
+	})
+
+	var b bytes.Buffer
+	if err := r.Write(&b); err != nil {
+		t.Errorf("Write returned error %v", err)
+	}
+}
+
+func TestDistributionBugURL(t *testing.T) {
+	r, err := NewRPM(RPMMetaData{
+		Name:         "test",
+		Version:      "1.0",
+		Release:      "1",
+		Distribution: "Fedora",
+		BugURL:       "https://bugzilla.example.com",
 	})
 	if err != nil {
 		t.Fatalf("NewRPM returned error %v", err)

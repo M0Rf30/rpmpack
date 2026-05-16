@@ -69,7 +69,6 @@ func TestEntry(t *testing.T) {
 		wantData:       "737472696e6700617272617900",
 	}}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			var e IndexEntry
 			switch v := tc.value.(type) {

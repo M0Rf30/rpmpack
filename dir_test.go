@@ -46,7 +46,6 @@ func TestDirIndex(t *testing.T) {
 		wantAllDirs: []string{"first", "second", "third"},
 	}}
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			d := newDirIndex()
 			for _, b := range tc.before {
