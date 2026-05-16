@@ -1,0 +1,67 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Correctness
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - nilerr
+    - errorlint
+    - ineffassign
+    - copyloopvar
+
+    # Security
+    - gosec
+
+    # Code quality
+    - misspell
+    - nolintlint
+    - durationcheck
+    - usestdlibvars
+    - unconvert
+
+    # Style
+    - asciicheck
+    - revive
+
+  settings:
+    gosec:
+      excludes:
+        - G115 # integer overflow conversion (uint/int casts common in RPM binary format)
+
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+        - name: error-naming
+        - name: error-return
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec
+          - errcheck
+    generated: strict
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.26"
