@@ -22,6 +22,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,13 +34,44 @@ const (
 	DashStdinStdout = "-"
 )
 
+// changelogEntries is a custom flag type for parsing changelog entries.
+// Each entry is in the format "TIMESTAMP|AUTHOR|TEXT" where TIMESTAMP is a Unix timestamp.
+type changelogEntries []rpmpack.ChangelogEntry
+
+func (c *changelogEntries) String() string {
+	return fmt.Sprintf("%v", []rpmpack.ChangelogEntry(*c))
+}
+
+func (c *changelogEntries) Set(value string) error {
+	parts := strings.SplitN(value, "|", 3)
+	if len(parts) != 3 {
+		return fmt.Errorf("changelog entry must be in format 'TIMESTAMP|AUTHOR|TEXT', got: %s", value)
+	}
+
+	timestamp, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp in changelog entry: %s", parts[0])
+	}
+
+	entry := rpmpack.ChangelogEntry{
+		Time:   time.Unix(timestamp, 0),
+		Author: parts[1],
+		Text:   parts[2],
+	}
+
+	*c = append(*c, entry)
+	return nil
+}
+
 var (
 	provides,
 	obsoletes,
 	suggests,
 	recommends,
 	requires,
-	conflicts rpmpack.Relations
+	conflicts,
+	enhances,
+	supplements rpmpack.Relations
 	name        = flag.String("name", "", "the package name")
 	version     = flag.String("version", "", "the package version")
 	release     = flag.String("release", "", "the rpm release")
@@ -56,6 +88,8 @@ var (
 	group       = flag.String("group", "", "the rpm group")
 	url         = flag.String("url", "", "the rpm url")
 	licence     = flag.String("licence", "", "the rpm licence name")
+	distribution = flag.String("distribution", "", "the rpm distribution")
+	bugurl      = flag.String("bugurl", "", "the rpm bug report URL")
 
 	prein  = flag.String("prein", "", "prein scriptlet contents (not filename)")
 	postin = flag.String("postin", "", "postin scriptlet contents (not filename)")
@@ -66,6 +100,7 @@ var (
 	dirAllowlistFile = flag.String("dir_allowlist_file", "", "A file with one directory per line to include from the tar to the rpm")
 
 	outputfile = flag.String("file", "", "write rpm to `RPMFILE` instead of stdout")
+	changelog  changelogEntries
 )
 
 func usage() {
@@ -86,6 +121,9 @@ func main() {
 	flag.Var(&recommends, "recommends", "rpm recommends values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&requires, "requires", "rpm requires values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&conflicts, "conflicts", "rpm provides values, can be just name or in the form of name=version (eg. bla=1.2.3)")
+	flag.Var(&enhances, "enhances", "rpm enhances values, can be just name or in the form of name=version (eg. bla=1.2.3)")
+	flag.Var(&supplements, "supplements", "rpm supplements values, can be just name or in the form of name=version (eg. bla=1.2.3)")
+	flag.Var(&changelog, "changelog", "rpm changelog entry in format 'TIMESTAMP|AUTHOR|TEXT' where TIMESTAMP is a Unix timestamp")
 	flag.Usage = usage
 	flag.Parse()
 	if *name == "" || *version == "" {
@@ -134,7 +172,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to open file %s for writing", *outputfile)
 			}
-			defer f.Close()
+			defer func() {
+				if err := f.Close(); err != nil {
+					log.Printf("failed to close file: %v", err)
+				}
+			}()
 			w = f
 		} else {
 		        // Only print notice if no explicit '-' is given, merge with tar notice:
@@ -167,12 +209,17 @@ func main() {
 			Description: *description,
 			Summary:     *summary,
 			Compressor:  *compressor,
+			Distribution: *distribution,
+			BugURL:      *bugurl,
 			Provides:    provides,
 			Obsoletes:   obsoletes,
 			Suggests:    suggests,
 			Recommends:  recommends,
 			Requires:    requires,
 			Conflicts:   conflicts,
+			Enhances:    enhances,
+			Supplements: supplements,
+			Changelog:   changelog,
 		})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tar2rpm error: %v\n", err)
@@ -185,7 +232,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to open dir allowlist %q for reading\n: %s", *dirAllowlistFile, err)
 			}
-			defer f.Close()
+			defer func() {
+				if err := f.Close(); err != nil {
+					log.Printf("failed to close file: %v", err)
+				}
+			}()
 			scan := bufio.NewScanner(f)
 			for scan.Scan() {
 				t := scan.Text()
