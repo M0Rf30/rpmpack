@@ -45,6 +45,13 @@ const (
 	NoEpoch = ^uint32(0)
 )
 
+// ChangelogEntry represents a single entry in the RPM changelog.
+type ChangelogEntry struct {
+	Time   time.Time
+	Author string
+	Text   string
+}
+
 var (
 	// ErrWriteAfterClose is returned when a user calls Write() on a closed rpm.
 	ErrWriteAfterClose = errors.New("rpm write after close")
@@ -73,12 +80,20 @@ type RPMMetaData struct {
 	// Prefixes is used for relocatable packages, usually with a one item
 	// slice, e.g. `["/opt"]`.
 	Prefixes []string
+	// Distribution is the name of the distribution (e.g. "Fedora", "openSUSE").
+	Distribution string
+	// BugURL is the URL for reporting bugs.
+	BugURL string
+	// Changelog is the list of changelog entries, newest first.
+	Changelog []ChangelogEntry
 	Provides,
 	Obsoletes,
 	Suggests,
 	Recommends,
 	Requires,
-	Conflicts Relations
+	Conflicts,
+	Enhances,
+	Supplements Relations
 }
 
 // RPM holds the state of a particular rpm file. Please use NewRPM to instantiate it.
@@ -264,7 +279,7 @@ func (r *RPM) Write(w io.Writer) error {
 		return fmt.Errorf("failed to close cpio payload: %w", err)
 	}
 	if err := r.compressedPayload.Close(); err != nil {
-		return fmt.Errorf("failed to close %s payload: %w", r.RPMMetaData.Compressor, err)
+		return fmt.Errorf("failed to close %s payload: %w", r.Compressor, err)
 	}
 
 	if _, err := w.Write(lead(r.Name, r.FullVersion())); err != nil {
@@ -368,6 +383,12 @@ func (r *RPM) writeRelationIndexes(h *index) error {
 	if err := r.Conflicts.AddToIndex(h, tagConflicts, tagConflictVersion, tagConflictFlags); err != nil {
 		return fmt.Errorf("failed to add conflicts: %w", err)
 	}
+	if err := r.Enhances.AddToIndex(h, tagEnhances, tagEnhanceVersion, tagEnhanceFlags); err != nil {
+		return fmt.Errorf("failed to add enhances: %w", err)
+	}
+	if err := r.Supplements.AddToIndex(h, tagSupplements, tagSupplementVersion, tagSupplementFlags); err != nil {
+		return fmt.Errorf("failed to add supplements: %w", err)
+	}
 
 	return nil
 }
@@ -419,6 +440,25 @@ func (r *RPM) writeGenIndexes(h *index) {
 	}
 	if r.URL != "" {
 		h.Add(tagURL, EntryString(r.URL))
+	}
+	if r.Distribution != "" {
+		h.Add(tagDistribution, EntryString(r.Distribution))
+	}
+	if r.BugURL != "" {
+		h.Add(tagBugURL, EntryString(r.BugURL))
+	}
+	if len(r.Changelog) > 0 {
+		times := make([]int32, len(r.Changelog))
+		names := make([]string, len(r.Changelog))
+		texts := make([]string, len(r.Changelog))
+		for i, e := range r.Changelog {
+			times[i] = int32(e.Time.Unix())
+			names[i] = e.Author
+			texts[i] = e.Text
+		}
+		h.Add(tagChangelogTime, EntryInt32(times))
+		h.Add(tagChangelogName, EntryStringSlice(names))
+		h.Add(tagChangelogText, EntryStringSlice(texts))
 	}
 	h.Add(tagPayloadDigest, EntryStringSlice([]string{fmt.Sprintf("%x", sha256.Sum256(r.payload.Bytes()))}))
 	h.Add(tagPayloadDigestAlgo, EntryInt32([]int32{hashAlgoSHA256}))

@@ -102,4 +102,21 @@ const (
 	tagSuggestFlags      = 0x13bb // 5051
 	tagPayloadDigest     = 0x13e4 // 5092
 	tagPayloadDigestAlgo = 0x13e5 // 5093
+
+	// Changelog tags
+	tagChangelogTime = 0x0438 // 1080
+	tagChangelogName = 0x0439 // 1081
+	tagChangelogText = 0x043a // 1082
+
+	// Distribution info
+	tagDistribution = 0x03f2 // 1010
+	tagBugURL       = 0x13c9 // 5065
+
+	// Enhances/Supplements (weak deps)
+	tagEnhances          = 0x13bc // 5052
+	tagEnhanceVersion    = 0x13bd // 5053
+	tagEnhanceFlags      = 0x13be // 5054
+	tagSupplements       = 0x13bf // 5055
+	tagSupplementVersion = 0x13c0 // 5056
+	tagSupplementFlags   = 0x13c1 // 5057
 )
