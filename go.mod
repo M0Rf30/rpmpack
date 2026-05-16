@@ -1,4 +1,4 @@
-module github.com/google/rpmpack
+module github.com/M0Rf30/rpmpack
 
 go 1.26
 

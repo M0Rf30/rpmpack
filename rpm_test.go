@@ -41,7 +41,7 @@ func TestFileOwner(t *testing.T) {
 	}
 }
 
-// https://github.com/google/rpmpack/issues/49
+// https://github.com/M0Rf30/rpmpack/issues/49
 func Test100644(t *testing.T) {
 	r, err := NewRPM(RPMMetaData{})
 	if err != nil {

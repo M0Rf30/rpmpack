@@ -22,7 +22,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/google/rpmpack"
+	"github.com/M0Rf30/rpmpack"
 )
 
 func main() {

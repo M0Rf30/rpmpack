@@ -416,7 +416,7 @@ func (r *RPM) writeGenIndexes(h *index) {
 	h.Add(tagBuildHost, EntryString(r.BuildHost))
 	if !r.BuildTime.IsZero() {
 		// time.Time zero value is confusing, avoid if not supplied
-		// see https://github.com/google/rpmpack/issues/43
+		// see https://github.com/M0Rf30/rpmpack/issues/43
 		h.Add(tagBuildTime, EntryInt32([]int32{int32(r.BuildTime.Unix())}))
 	}
 	if len(r.Prefixes) != 0 {

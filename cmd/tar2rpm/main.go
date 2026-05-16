@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/rpmpack"
+	"github.com/M0Rf30/rpmpack"
 )
 
 const (
