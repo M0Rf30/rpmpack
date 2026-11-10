@@ -77,6 +77,10 @@ type RPMMetaData struct {
 	Compressor string
 	Epoch     uint32
 	BuildTime time.Time
+	// Format selects the package format: FormatV4 (the default, also selected by
+	// the zero value) or FormatV6 for the RPM v6 format written by rpm >= 6.0.
+	// NewRPM fails for any other value.
+	Format int
 	// Prefixes is used for relocatable packages, usually with a one item
 	// slice, e.g. `["/opt"]`.
 	Prefixes []string
@@ -126,11 +130,21 @@ type RPM struct {
 	customTags        map[int]IndexEntry
 	customSigs        map[int]IndexEntry
 	pgpSigner         func([]byte) ([]byte, error)
+	// v6 is only set when writing the RPM v6 format.
+	v6 *v6State
 }
 
 // NewRPM creates and returns a new RPM struct.
 func NewRPM(m RPMMetaData) (*RPM, error) {
 	var err error
+
+	switch m.Format {
+	case 0:
+		m.Format = FormatV4
+	case FormatV4, FormatV6:
+	default:
+		return nil, fmt.Errorf("unsupported rpm format %d, want %d or %d", m.Format, FormatV4, FormatV6)
+	}
 
 	if m.OS == "" {
 		m.OS = "linux"
@@ -155,10 +169,15 @@ func NewRPM(m RPMMetaData) (*RPM, error) {
 		di:                newDirIndex(),
 		payload:           p,
 		compressedPayload: z,
-		cpio:              cpio.NewWriter(z),
 		files:             make(map[string]RPMFile),
 		customTags:        make(map[int]IndexEntry),
 		customSigs:        make(map[int]IndexEntry),
+	}
+
+	if m.Format == FormatV6 {
+		rpm.v6 = newV6State(z)
+	} else {
+		rpm.cpio = cpio.NewWriter(z)
 	}
 
 	// A package must provide itself...
@@ -275,14 +294,22 @@ func (r *RPM) Write(w io.Writer) error {
 			return fmt.Errorf("failed to write file %q: %w", fn, err)
 		}
 	}
-	if err := r.cpio.Close(); err != nil {
+	if r.v6 != nil {
+		if err := r.v6.writeTrailer(); err != nil {
+			return fmt.Errorf("failed to close cpio payload: %w", err)
+		}
+	} else if err := r.cpio.Close(); err != nil {
 		return fmt.Errorf("failed to close cpio payload: %w", err)
 	}
 	if err := r.compressedPayload.Close(); err != nil {
 		return fmt.Errorf("failed to close %s payload: %w", r.Compressor, err)
 	}
 
-	if _, err := w.Write(lead(r.Name, r.FullVersion())); err != nil {
+	leadBytes := lead(r.Name, r.FullVersion())
+	if r.v6 != nil {
+		leadBytes = leadV6(r.Name, r.FullVersion())
+	}
+	if _, err := w.Write(leadBytes); err != nil {
 		return fmt.Errorf("failed to write lead: %w", err)
 	}
 	// Write the regular header.
@@ -305,23 +332,33 @@ func (r *RPM) Write(w io.Writer) error {
 		return fmt.Errorf("failed to retrieve header: %w", err)
 	}
 	// Write the signatures
-	s := newIndex(signatures)
-	if err := r.writeSignatures(s, hb); err != nil {
-		return fmt.Errorf("failed to create signatures: %w", err)
-	}
+	if r.v6 != nil {
+		sb, err := r.signatureHeaderV6(hb)
+		if err != nil {
+			return fmt.Errorf("failed to create signatures: %w", err)
+		}
+		if _, err := w.Write(sb); err != nil {
+			return fmt.Errorf("failed to write signature bytes: %w", err)
+		}
+	} else {
+		s := newIndex(signatures)
+		if err := r.writeSignatures(s, hb); err != nil {
+			return fmt.Errorf("failed to create signatures: %w", err)
+		}
 
-	s.AddEntries(r.customSigs)
-	sb, err := s.Bytes()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve signatures header: %w", err)
-	}
+		s.AddEntries(r.customSigs)
+		sb, err := s.Bytes()
+		if err != nil {
+			return fmt.Errorf("failed to retrieve signatures header: %w", err)
+		}
 
-	if _, err := w.Write(sb); err != nil {
-		return fmt.Errorf("failed to write signature bytes: %w", err)
-	}
-	// Signatures are padded to 8-byte boundaries
-	if _, err := w.Write(make([]byte, (8-len(sb)%8)%8)); err != nil {
-		return fmt.Errorf("failed to write signature padding: %w", err)
+		if _, err := w.Write(sb); err != nil {
+			return fmt.Errorf("failed to write signature bytes: %w", err)
+		}
+		// Signatures are padded to 8-byte boundaries
+		if _, err := w.Write(make([]byte, (8-len(sb)%8)%8)); err != nil {
+			return fmt.Errorf("failed to write signature padding: %w", err)
+		}
 	}
 	if _, err := w.Write(hb); err != nil {
 		return fmt.Errorf("failed to write header body: %w", err)
@@ -377,7 +414,11 @@ func (r *RPM) writeRelationIndexes(h *index) error {
 	if err := r.Recommends.AddToIndex(h, tagRecommends, tagRecommendVersion, tagRecommendFlags); err != nil {
 		return fmt.Errorf("failed to add recommends: %w", err)
 	}
-	if err := r.Requires.AddToIndex(h, tagRequires, tagRequireVersion, tagRequireFlags); err != nil {
+	requires := r.Requires
+	if r.v6 != nil {
+		requires = r.v6Requires()
+	}
+	if err := requires.AddToIndex(h, tagRequires, tagRequireVersion, tagRequireFlags); err != nil {
 		return fmt.Errorf("failed to add requires: %w", err)
 	}
 	if err := r.Conflicts.AddToIndex(h, tagConflicts, tagConflictVersion, tagConflictFlags); err != nil {
@@ -405,7 +446,9 @@ func (r *RPM) AddCustomSig(tag int, e IndexEntry) {
 
 func (r *RPM) writeGenIndexes(h *index) {
 	h.Add(tagHeaderI18NTable, EntryString("C"))
-	h.Add(tagSize, EntryInt32([]int32{int32(r.payloadSize)}))
+	if r.v6 == nil {
+		h.Add(tagSize, EntryInt32([]int32{int32(r.payloadSize)}))
+	}
 	h.Add(tagName, EntryString(r.Name))
 	h.Add(tagVersion, EntryString(r.Version))
 	if r.Epoch != NoEpoch {
@@ -461,7 +504,11 @@ func (r *RPM) writeGenIndexes(h *index) {
 		h.Add(tagChangelogText, EntryStringSlice(texts))
 	}
 	h.Add(tagPayloadDigest, EntryStringSlice([]string{fmt.Sprintf("%x", sha256.Sum256(r.payload.Bytes()))}))
-	h.Add(tagPayloadDigestAlgo, EntryInt32([]int32{hashAlgoSHA256}))
+	if r.v6 == nil {
+		h.Add(tagPayloadDigestAlgo, EntryInt32([]int32{hashAlgoSHA256}))
+	} else {
+		r.writeV6Indexes(h)
+	}
 
 	// rpm utilities look for the sourcerpm tag to deduce if this is not a source rpm (if it has a sourcerpm,
 	// it is NOT a source rpm).
@@ -501,7 +548,9 @@ func (r *RPM) writeFileIndexes(h *index) {
 	h.Add(tagBasenames, EntryStringSlice(r.basenames))
 	h.Add(tagDirindexes, EntryUint32(r.dirindexes))
 	h.Add(tagDirnames, EntryStringSlice(r.di.AllDirs()))
-	h.Add(tagFileSizes, EntryUint32(r.filesizes))
+	if r.v6 == nil {
+		h.Add(tagFileSizes, EntryUint32(r.filesizes))
+	}
 	h.Add(tagFileModes, EntryUint16(r.filemodes))
 	h.Add(tagFileUserName, EntryStringSlice(r.fileowners))
 	h.Add(tagFileGroupName, EntryStringSlice(r.filegroups))
@@ -530,7 +579,12 @@ func (r *RPM) writeFileIndexes(h *index) {
 	}
 	h.Add(tagFileINodes, EntryInt32(inodes))
 	h.Add(tagFileDevices, EntryInt32(devices))
-	h.Add(tagFileDigestAlgo, EntryInt32(digestAlgo))
+	if r.v6 == nil {
+		h.Add(tagFileDigestAlgo, EntryInt32(digestAlgo))
+	} else {
+		// v6 has a single digest algorithm for all files.
+		h.Add(tagFileDigestAlgo, EntryInt32([]int32{hashAlgoSHA256}))
+	}
 	h.Add(tagFileVerifyFlags, EntryInt32(verifyFlags))
 	h.Add(tagFileRDevs, EntryInt16(fileRDevs))
 	h.Add(tagFileLangs, EntryStringSlice(fileLangs))
@@ -590,6 +644,8 @@ func (r *RPM) writeFile(f RPMFile) error {
 	r.fileflags = append(r.fileflags, uint32(f.Type))
 
 	links := 1
+	// v6 packages do not record a size for directories.
+	var v6size uint64
 	switch {
 	case f.Mode&040000 != 0: // directory
 		r.filesizes = append(r.filesizes, 4096)
@@ -598,19 +654,27 @@ func (r *RPM) writeFile(f RPMFile) error {
 		links = 2
 	case f.Mode&0120000 == 0120000: //  symlink
 		r.filesizes = append(r.filesizes, uint32(len(f.Body)))
+		v6size = uint64(len(f.Body))
 		r.filedigests = append(r.filedigests, "")
 		r.filelinktos = append(r.filelinktos, string(f.Body))
 	default: // regular file
 		f.Mode = f.Mode | 0100000
 		r.filesizes = append(r.filesizes, uint32(len(f.Body)))
+		v6size = uint64(len(f.Body))
 		r.filedigests = append(r.filedigests, fmt.Sprintf("%x", sha256.Sum256(f.Body)))
 		r.filelinktos = append(r.filelinktos, "")
 	}
 	r.filemodes = append(r.filemodes, uint16(f.Mode))
+	if r.v6 != nil {
+		r.v6.addFile(v6size, mimeType(f))
+	}
 
 	// Ghost files have no payload
 	if f.Type == GhostFile {
 		return nil
+	}
+	if r.v6 != nil {
+		return r.writePayloadV6(f)
 	}
 	return r.writePayload(f, links)
 }
@@ -629,5 +693,20 @@ func (r *RPM) writePayload(f RPMFile, links int) error {
 		return fmt.Errorf("failed to write payload file content: %w", err)
 	}
 	r.payloadSize += uint(len(f.Body))
+	return nil
+}
+
+// writePayloadV6 writes the stripped cpio entry of the file which was just added to the
+// header indexes. The entry refers to the file by its position in the header, which must
+// be the same as the file order in the header.
+func (r *RPM) writePayloadV6(f RPMFile) error {
+	var content []byte
+	if f.Mode&040000 == 0 { // directories have no content
+		content = f.Body
+	}
+	if err := r.v6.writeEntry(len(r.basenames)-1, content); err != nil {
+		return fmt.Errorf("failed to write payload file: %w", err)
+	}
+	r.payloadSize += uint(len(content))
 	return nil
 }

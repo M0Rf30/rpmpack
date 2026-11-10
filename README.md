@@ -57,6 +57,14 @@ if err := r.Write(w); err != nil {
 }
 ```
 
+### RPM v6 packages
+
+By default `rpmpack` writes RPM v4 packages. Set `Format: rpmpack.FormatV6` in
+`RPMMetaData` to write the RPM v6 format understood by rpm 6.0 and later (stripped cpio
+payload, SHA-256/SHA-512/SHA3-256 payload digests, 64 bit file sizes, OpenPGP signature of
+the header only). The signer registered with `SetPGPSigner` is called once, with the header,
+and must return a binary detached OpenPGP signature.
+
 ## Usage in the bazel build system (pkg_tar2rpm)
 
 There is a working example inside [example_bazel](example_bazel/)
