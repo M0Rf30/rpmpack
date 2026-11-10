@@ -11,7 +11,7 @@ import (
 // goldenV4Sum is the goldenDigest of the package written by buildGoldenV4. It pins
 // the v4 output (recorded with the code at v0.7.1 plus v6 support): any change to
 // it needs to be a deliberate format change.
-const goldenV4Sum = "58cec733660887575a3f80478b35348d944065ad2c9bd4dbd4526ae4b8fbc48c"
+const goldenV4Sum = "fe1648f19d134819df218d99595fcd8eea11878c453c1e6d7491ae42b04a1e6b"
 
 func buildGoldenV4(t *testing.T) []byte {
 	t.Helper()

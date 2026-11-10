@@ -111,8 +111,10 @@ func readHeader(t *testing.T, b []byte) (parsedHeader, int) {
 			t.Fatalf("tags not strictly sorted: %d after %d", tag, prev)
 		}
 		prev = tag
-		if i == 0 { // region tag: offset is relative to the end of the data
-			off = dsize + off
+		if i == 0 { // region tag: its data is the 16 byte trailer of the data region
+			if off != dsize-16 {
+				t.Fatalf("region trailer at offset %d, want %d", off, dsize-16)
+			}
 			cnt = 16
 		}
 		// the end of an entry is the start of the next one in data order,
