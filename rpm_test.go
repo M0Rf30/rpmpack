@@ -306,6 +306,11 @@ func TestWriteRejectsInvalidFile(t *testing.T) {
 		{name: "NUL in symlink target", file: func() RPMFile {
 			return RPMFile{Name: "/x", Mode: 0120777, Body: []byte("a\x00b")}
 		}},
+		{name: "empty symlink target", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 0120777} }},
+		{name: "character device", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 020644} }},
+		{name: "fifo", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 010644} }},
+		{name: "socket", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 0140644} }},
+		{name: "block device", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 060644} }},
 		{name: "mode over 16 bits", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 1 << 16} }},
 		{name: "v4 file over 4 GiB", file: func() RPMFile { return RPMFile{Name: "/x", Mode: 0644, Body: big()} }},
 		{name: "v4 ghost over 4 GiB", file: func() RPMFile {

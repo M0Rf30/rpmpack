@@ -72,6 +72,8 @@ var (
 const (
 	// maxMode is the largest value of the 16 bit rpm file mode.
 	maxMode = math.MaxUint16
+	// modeTypeMask selects the file type bits (S_IFMT) of a mode.
+	modeTypeMask = 0170000
 	// maxV4FileSize is the largest file the v4 cpio (newc) payload can hold: the size
 	// is stored in 8 hex digits. v6 payloads have no such limit.
 	maxV4FileSize = math.MaxUint32
@@ -715,19 +717,23 @@ func (r *RPM) writeFile(f RPMFile) error {
 }
 
 func (r *RPM) writePayload(f RPMFile, links int) error {
+	content := f.Body
+	if f.Mode&040000 != 0 { // directories have no content, whatever Body holds
+		content = nil
+	}
 	hdr := &cpio.Header{
 		Name:  f.Name,
 		Mode:  cpio.FileMode(f.Mode),
-		Size:  int64(len(f.Body)),
+		Size:  int64(len(content)),
 		Links: links,
 	}
 	if err := r.cpio.WriteHeader(hdr); err != nil {
 		return fmt.Errorf("failed to write payload file header: %w", err)
 	}
-	if _, err := r.cpio.Write(f.Body); err != nil {
+	if _, err := r.cpio.Write(content); err != nil {
 		return fmt.Errorf("failed to write payload file content: %w", err)
 	}
-	r.payloadSize += uint64(len(f.Body))
+	r.payloadSize += uint64(len(content))
 	return nil
 }
 
@@ -796,6 +802,11 @@ func (r *RPM) validateFile(f RPMFile) error {
 		return fmt.Errorf("%w: %q has an embedded NUL byte", ErrInvalidFile, f.Name)
 	case f.Mode > maxMode:
 		return fmt.Errorf("%w: %q has mode %#o which does not fit in 16 bits", ErrInvalidFile, f.Name, f.Mode)
+	case !supportedFileType(f.Mode):
+		return fmt.Errorf("%w: %q has file type bits %#o, only regular files, directories and symlinks are supported",
+			ErrInvalidFile, f.Name, f.Mode&modeTypeMask)
+	case f.Mode&0120000 == 0120000 && f.Mode&040000 == 0 && len(f.Body) == 0:
+		return fmt.Errorf("%w: symlink %q has an empty target", ErrInvalidFile, f.Name)
 	case f.Mode&0120000 == 0120000 && f.Mode&040000 == 0 && bytes.IndexByte(f.Body, 0) >= 0:
 		return fmt.Errorf("%w: symlink %q has an embedded NUL byte in its target", ErrInvalidFile, f.Name)
 	case r.v6 == nil && uint64(len(f.Body)) > maxV4FileSize:
@@ -844,6 +855,17 @@ func (r *RPM) validateMetadata() error {
 		}
 	}
 	return nil
+}
+
+// supportedFileType reports whether the file type bits of mode are a regular file
+// (also when unset), a directory or a symlink. Devices, fifos and sockets are not
+// supported; their bits would otherwise be mangled into another type.
+func supportedFileType(mode uint) bool {
+	switch mode & modeTypeMask {
+	case 0, 0100000, 040000, 0120000:
+		return true
+	}
+	return false
 }
 
 func hasNUL(s string) bool { return strings.IndexByte(s, 0) >= 0 }
