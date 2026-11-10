@@ -191,7 +191,7 @@ func (r *RPM) writeV6Indexes(h *index) {
 	h.Add(tagPayloadSHA3256Alt, EntryString(fmt.Sprintf("%x", r.v6.sha3.Sum(nil))))
 	h.Add(tagPayloadSize, EntryInt64([]int64{int64(r.payload.Len())}))
 	h.Add(tagPayloadSizeAlt, EntryInt64([]int64{r.v6.size}))
-	h.Add(tagLongSize, EntryUint64([]uint64{uint64(r.payloadSize)}))
+	h.Add(tagLongSize, EntryUint64([]uint64{r.payloadSize}))
 
 	if len(r.basenames) > 0 {
 		h.Add(tagLongFileSizes, EntryUint64(r.v6.filesizes))

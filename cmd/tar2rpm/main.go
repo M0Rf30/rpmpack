@@ -19,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"os"
 	"strconv"
@@ -72,24 +71,24 @@ var (
 	conflicts,
 	enhances,
 	supplements rpmpack.Relations
-	name        = flag.String("name", "", "the package name")
-	version     = flag.String("version", "", "the package version")
-	release     = flag.String("release", "", "the rpm release")
-	epoch       = flag.Uint64("epoch", 0, "the rpm epoch")
-	arch        = flag.String("arch", "noarch", "the rpm architecture")
-	prefixes    = flag.String("prefixes", "", "comma separated prefixes for relocatable packages")
-	buildTime   = flag.Int64("build_time", 0, "the build_time unix timestamp")
-	compressor  = flag.String("compressor", "gzip", "the rpm compressor")
-	osName      = flag.String("os", "linux", "the rpm os")
-	summary     = flag.String("summary", "", "the rpm summary")
-	description = flag.String("description", "", "the rpm description")
-	vendor      = flag.String("vendor", "", "the rpm vendor")
-	packager    = flag.String("packager", "", "the rpm packager")
-	group       = flag.String("group", "", "the rpm group")
-	url         = flag.String("url", "", "the rpm url")
-	licence     = flag.String("licence", "", "the rpm licence name")
+	name         = flag.String("name", "", "the package name")
+	version      = flag.String("version", "", "the package version")
+	release      = flag.String("release", "", "the rpm release")
+	epoch        = flag.Uint64("epoch", 0, "the rpm epoch")
+	arch         = flag.String("arch", "noarch", "the rpm architecture")
+	prefixes     = flag.String("prefixes", "", "comma separated prefixes for relocatable packages")
+	buildTime    = flag.Int64("build_time", 0, "the build_time unix timestamp")
+	compressor   = flag.String("compressor", "gzip", "the rpm compressor")
+	osName       = flag.String("os", "linux", "the rpm os")
+	summary      = flag.String("summary", "", "the rpm summary")
+	description  = flag.String("description", "", "the rpm description")
+	vendor       = flag.String("vendor", "", "the rpm vendor")
+	packager     = flag.String("packager", "", "the rpm packager")
+	group        = flag.String("group", "", "the rpm group")
+	url          = flag.String("url", "", "the rpm url")
+	licence      = flag.String("licence", "", "the rpm licence name")
 	distribution = flag.String("distribution", "", "the rpm distribution")
-	bugurl      = flag.String("bugurl", "", "the rpm bug report URL")
+	bugurl       = flag.String("bugurl", "", "the rpm bug report URL")
 
 	prein  = flag.String("prein", "", "prein scriptlet contents (not filename)")
 	postin = flag.String("postin", "", "postin scriptlet contents (not filename)")
@@ -120,7 +119,7 @@ func main() {
 	flag.Var(&suggests, "suggests", "rpm suggests values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&recommends, "recommends", "rpm recommends values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&requires, "requires", "rpm requires values, can be just name or in the form of name=version (eg. bla=1.2.3)")
-	flag.Var(&conflicts, "conflicts", "rpm provides values, can be just name or in the form of name=version (eg. bla=1.2.3)")
+	flag.Var(&conflicts, "conflicts", "rpm conflicts values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&enhances, "enhances", "rpm enhances values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&supplements, "supplements", "rpm supplements values, can be just name or in the form of name=version (eg. bla=1.2.3)")
 	flag.Var(&changelog, "changelog", "rpm changelog entry in format 'TIMESTAMP|AUTHOR|TEXT' where TIMESTAMP is a Unix timestamp")
@@ -136,6 +135,15 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "tar2rpm error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// run converts the tar to an rpm. It returns errors instead of exiting so that the
+// deferred closes and the removal of a partial output file always run.
+func run() (err error) {
 	var buildTimeStamp time.Time
 	if *buildTime != 0 {
 		buildTimeStamp = time.Unix(*buildTime, 0)
@@ -154,93 +162,101 @@ func main() {
 		} else {
 			f, err := os.Open(flag.Arg(0))
 			if err != nil {
-				log.Fatalf("Failed to open file %s for reading\n", flag.Arg(0))
+				return fmt.Errorf("failed to open %s for reading: %w", flag.Arg(0), err)
 			}
+			defer f.Close()
 			i = f
 		}
-
 	default:
 		fmt.Fprintln(os.Stderr, "expecting 0 or 1 positional arguments")
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	w := os.Stdout
+	var w io.Writer = os.Stdout
 	if *outputfile != DashStdinStdout {
 		if *outputfile != "" {
-			f, err := os.Create(*outputfile)
-			if err != nil {
-				log.Fatalf("Failed to open file %s for writing", *outputfile)
+			// An rpm is a regular, world readable artifact: 0644 before the umask.
+			f, openErr := os.OpenFile(*outputfile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) //nolint:gosec // output path is a CLI argument
+			if openErr != nil {
+				return fmt.Errorf("failed to open %s for writing: %w", *outputfile, openErr)
 			}
+			// The closure below reads the named result err, not a shadowed one.
 			defer func() {
-				if err := f.Close(); err != nil {
-					log.Printf("failed to close file: %v", err)
+				// A failed close can mean lost data: report it, and never leave a
+				// truncated rpm behind.
+				if cerr := f.Close(); cerr != nil && err == nil {
+					err = fmt.Errorf("failed to close %s: %w", *outputfile, cerr)
+				}
+				if err != nil {
+					_ = os.Remove(*outputfile)
 				}
 			}()
 			w = f
 		} else {
-		        // Only print notice if no explicit '-' is given, merge with tar notice:
+			// Only print notice if no explicit '-' is given, merge with tar notice:
 			if noticeStdinStdout != "" {
 				noticeStdinStdout += ", "
 			}
 			noticeStdinStdout += "writing rpm to stdout"
-
 		}
 	}
 	if noticeStdinStdout != "" {
 		fmt.Fprintln(os.Stderr, "tar2rpm: "+noticeStdinStdout+".")
 	}
+
+	var prefixList []string
+	if *prefixes != "" {
+		prefixList = strings.Split(*prefixes, ",")
+	}
 	r, err := rpmpack.FromTar(
 		i,
 		rpmpack.RPMMetaData{
-			Name:        *name,
-			Version:     *version,
-			Release:     *release,
-			Epoch:       uint32(*epoch),
-			BuildTime:   buildTimeStamp,
-			Prefixes:    strings.Split(*prefixes, ","),
-			Arch:        *arch,
-			OS:          *osName,
-			Vendor:      *vendor,
-			Packager:    *packager,
-			Group:       *group,
-			URL:         *url,
-			Licence:     *licence,
-			Description: *description,
-			Summary:     *summary,
-			Compressor:  *compressor,
+			Name:         *name,
+			Version:      *version,
+			Release:      *release,
+			Epoch:        uint32(*epoch),
+			BuildTime:    buildTimeStamp,
+			Prefixes:     prefixList,
+			Arch:         *arch,
+			OS:           *osName,
+			Vendor:       *vendor,
+			Packager:     *packager,
+			Group:        *group,
+			URL:          *url,
+			Licence:      *licence,
+			Description:  *description,
+			Summary:      *summary,
+			Compressor:   *compressor,
 			Distribution: *distribution,
-			BugURL:      *bugurl,
-			Provides:    provides,
-			Obsoletes:   obsoletes,
-			Suggests:    suggests,
-			Recommends:  recommends,
-			Requires:    requires,
-			Conflicts:   conflicts,
-			Enhances:    enhances,
-			Supplements: supplements,
-			Changelog:   changelog,
+			BugURL:       *bugurl,
+			Provides:     provides,
+			Obsoletes:    obsoletes,
+			Suggests:     suggests,
+			Recommends:   recommends,
+			Requires:     requires,
+			Conflicts:    conflicts,
+			Enhances:     enhances,
+			Supplements:  supplements,
+			Changelog:    changelog,
 		})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "tar2rpm error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if *useDirAllowlist {
 		al := map[string]bool{}
 		if *dirAllowlistFile != "" {
 			f, err := os.Open(*dirAllowlistFile)
 			if err != nil {
-				log.Fatalf("Failed to open dir allowlist %q for reading\n: %s", *dirAllowlistFile, err)
+				return fmt.Errorf("failed to open dir allowlist %q for reading: %w", *dirAllowlistFile, err)
 			}
-			defer func() {
-				if err := f.Close(); err != nil {
-					log.Printf("failed to close file: %v", err)
-				}
-			}()
+			defer f.Close()
 			scan := bufio.NewScanner(f)
 			for scan.Scan() {
-				t := scan.Text()
-				al[t] = true
+				al[scan.Text()] = true
+			}
+			if err := scan.Err(); err != nil {
+				return fmt.Errorf("failed to read dir allowlist %q: %w", *dirAllowlistFile, err)
 			}
 		}
 		r.AllowListDirs(al)
@@ -252,8 +268,7 @@ func main() {
 	r.AddPostun(*postun)
 
 	if err := r.Write(w); err != nil {
-		fmt.Fprintf(os.Stderr, "rpm write error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("rpm write error: %w", err)
 	}
-
+	return nil
 }

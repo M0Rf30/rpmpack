@@ -26,7 +26,6 @@ import (
 )
 
 func main() {
-
 	sign := flag.Bool("sign", false, "sign the package with a fake sig")
 	flag.Parse()
 
@@ -94,5 +93,4 @@ func main() {
 	if err := r.Write(os.Stdout); err != nil {
 		log.Fatalf("write failed: %v", err)
 	}
-
 }
