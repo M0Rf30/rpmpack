@@ -27,6 +27,7 @@ const (
 
 	typeInt16       = 0x03
 	typeInt32       = 0x04
+	typeInt64       = 0x05
 	typeString      = 0x06
 	typeBinary      = 0x07
 	typeStringArray = 0x08
@@ -37,6 +38,7 @@ const (
 var boundaries = map[int]int{
 	typeInt16: 2,
 	typeInt32: 4,
+	typeInt64: 8,
 }
 
 // IndexEntry represents an RPM header index entry containing type, count, and data.
@@ -84,6 +86,16 @@ func EntryInt32(value []int32) IndexEntry {
 // EntryUint32 creates an IndexEntry from a slice of uint32 values.
 func EntryUint32(value []uint32) IndexEntry {
 	return intEntry(typeInt32, len(value), value)
+}
+
+// EntryInt64 creates an IndexEntry from a slice of int64 values (RPM INT64 type, used by RPM v6).
+func EntryInt64(value []int64) IndexEntry {
+	return intEntry(typeInt64, len(value), value)
+}
+
+// EntryUint64 creates an IndexEntry from a slice of uint64 values (RPM INT64 type, used by RPM v6).
+func EntryUint64(value []uint64) IndexEntry {
+	return intEntry(typeInt64, len(value), value)
 }
 
 // EntryString creates an IndexEntry from a string value.
@@ -192,6 +204,15 @@ func (i *index) eigenHeader() IndexEntry {
 	}
 
 	return EntryBytes(b.Bytes())
+}
+
+// leadV6 returns the RPM v6 lead: major 4, archnum 0, osnum 0, which is what rpm 6 writes.
+func leadV6(name, fullVersion string) []byte {
+	b := lead(name, fullVersion)
+	b[4] = 0x04
+	b[8], b[9] = 0, 0
+	b[76], b[77] = 0, 0
+	return b
 }
 
 func lead(name, fullVersion string) []byte {

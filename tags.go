@@ -21,6 +21,9 @@ const (
 	// Signature tags are obiously overlapping regular header tags..
 	sigRSA         = 0x010c // 256
 	sigSHA256      = 0x0111 // 273
+	sigOpenPGP     = 0x0116 // 278 (v6 only)
+	sigSHA3256     = 0x0117 // 279 (v6 only)
+	sigReserved    = 0x03e7 // 999 (v6 only)
 	sigSize        = 0x03e8 // 1000
 	sigPGP         = 0x03ea // 1002
 	sigPayloadSize = 0x03ef // 1007
@@ -102,6 +105,22 @@ const (
 	tagSuggestFlags      = 0x13bb // 5051
 	tagPayloadDigest     = 0x13e4 // 5092
 	tagPayloadDigestAlgo = 0x13e5 // 5093
+
+	// RPM v6 tags
+	tagLongFileSizes     = 0x1390 // 5008
+	tagLongSize          = 0x1391 // 5009
+	tagEncoding          = 0x13c6 // 5062
+	tagPayloadDigestAlt  = 0x13e9 // 5097
+	tagPayloadSize       = 0x13f8 // 5112
+	tagPayloadSizeAlt    = 0x13f9 // 5113
+	tagRPMFormat         = 0x13fa // 5114
+	tagFileMimeIndex     = 0x13fb // 5115
+	tagMimeDict          = 0x13fc // 5116
+	tagSourceNEVR        = 0x1400 // 5120
+	tagPayloadSHA512     = 0x1401 // 5121
+	tagPayloadSHA512Alt  = 0x1402 // 5122
+	tagPayloadSHA3256    = 0x1403 // 5123
+	tagPayloadSHA3256Alt = 0x1404 // 5124
 
 	// Changelog tags
 	tagChangelogTime = 0x0438 // 1080
