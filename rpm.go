@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"sort"
 	"strconv"
@@ -57,6 +58,23 @@ var (
 	ErrWriteAfterClose = errors.New("rpm write after close")
 	// ErrWrongFileOrder is returned when files are not sorted by name.
 	ErrWrongFileOrder = errors.New("wrong file addition order")
+	// ErrInvalidFile is returned by Write when a file added with AddFile cannot be
+	// represented in an rpm: a name that is not a clean absolute path, embedded NUL
+	// bytes, mode bits outside the 16 bit rpm file mode, or (for the v4 format) a
+	// body larger than the 4 GiB limit of the cpio payload.
+	ErrInvalidFile = errors.New("invalid rpm file")
+	// ErrInvalidMetadata is returned by Write when a package metadata value cannot
+	// be represented in the rpm header: strings with embedded NUL bytes, nil
+	// relations, or times outside the unsigned 32 bit range rpm stores.
+	ErrInvalidMetadata = errors.New("invalid rpm metadata")
+)
+
+const (
+	// maxMode is the largest value of the 16 bit rpm file mode.
+	maxMode = math.MaxUint16
+	// maxV4FileSize is the largest file the v4 cpio (newc) payload can hold: the size
+	// is stored in 8 hex digits. v6 payloads have no such limit.
+	maxV4FileSize = math.MaxUint32
 )
 
 // RPMMetaData contains meta info about the whole package.
@@ -105,7 +123,7 @@ type RPM struct {
 	RPMMetaData
 	di                *dirIndex
 	payload           *bytes.Buffer
-	payloadSize       uint
+	payloadSize       uint64
 	cpio              *cpio.Writer
 	basenames         []string
 	dirindexes        []uint32
@@ -283,12 +301,24 @@ func (r *RPM) Write(w io.Writer) error {
 	if r.closed {
 		return ErrWriteAfterClose
 	}
-	// Add all of the files, sorted alphabetically.
-	fnames := []string{}
+	// Validate everything before any state is consumed, so that a failed
+	// validation leaves the rpm usable.
+	if err := r.validateMetadata(); err != nil {
+		return err
+	}
+	fnames := make([]string, 0, len(r.files))
 	for fn := range r.files {
 		fnames = append(fnames, fn)
 	}
 	sort.Strings(fnames)
+	for _, fn := range fnames {
+		if err := r.validateFile(r.files[fn]); err != nil {
+			return err
+		}
+	}
+	// The payload compressor and the file indexes are consumed by writing.
+	r.closed = true
+	// Add all of the files, sorted alphabetically.
 	for _, fn := range fnames {
 		if err := r.writeFile(r.files[fn]); err != nil {
 			return fmt.Errorf("failed to write file %q: %w", fn, err)
@@ -378,9 +408,8 @@ func (r *RPM) SetPGPSigner(f func([]byte) ([]byte, error)) {
 
 // Only call this after the payload and header were written.
 func (r *RPM) writeSignatures(sigHeader *index, regHeader []byte) error {
-	sigHeader.Add(sigSize, EntryInt32([]int32{int32(r.payload.Len() + len(regHeader))}))
+	addSignatureSizes(sigHeader, uint64(r.payload.Len())+uint64(len(regHeader)), r.payloadSize)
 	sigHeader.Add(sigSHA256, EntryString(fmt.Sprintf("%x", sha256.Sum256(regHeader))))
-	sigHeader.Add(sigPayloadSize, EntryInt32([]int32{int32(r.payloadSize)}))
 	if r.pgpSigner != nil {
 		// For sha 256 you need to sign the header and payload separately
 		header := append([]byte{}, regHeader...)
@@ -415,8 +444,14 @@ func (r *RPM) writeRelationIndexes(h *index) error {
 		return fmt.Errorf("failed to add recommends: %w", err)
 	}
 	requires := r.Requires
-	if r.v6 != nil {
+	switch {
+	case r.v6 != nil:
 		requires = r.v6Requires()
+	case r.payloadSize > math.MaxUint32:
+		// The installed size is stored in the 64 bit LONGSIZE tag, which needs
+		// rpm to support large files.
+		requires = append(Relations{}, r.Requires...)
+		requires.addIfMissing(largeFilesRequire())
 	}
 	if err := requires.AddToIndex(h, tagRequires, tagRequireVersion, tagRequireFlags); err != nil {
 		return fmt.Errorf("failed to add requires: %w", err)
@@ -447,7 +482,7 @@ func (r *RPM) AddCustomSig(tag int, e IndexEntry) {
 func (r *RPM) writeGenIndexes(h *index) {
 	h.Add(tagHeaderI18NTable, EntryString("C"))
 	if r.v6 == nil {
-		h.Add(tagSize, EntryInt32([]int32{int32(r.payloadSize)}))
+		addInstalledSize(h, r.payloadSize)
 	}
 	h.Add(tagName, EntryString(r.Name))
 	h.Add(tagVersion, EntryString(r.Version))
@@ -460,7 +495,7 @@ func (r *RPM) writeGenIndexes(h *index) {
 	if !r.BuildTime.IsZero() {
 		// time.Time zero value is confusing, avoid if not supplied
 		// see https://github.com/M0Rf30/rpmpack/issues/43
-		h.Add(tagBuildTime, EntryInt32([]int32{int32(r.BuildTime.Unix())}))
+		h.Add(tagBuildTime, EntryUint32([]uint32{uint32(r.BuildTime.Unix())})) // range checked by validateMetadata
 	}
 	if len(r.Prefixes) != 0 {
 		h.Add(tagPrefixes, EntryStringSlice(r.Prefixes))
@@ -491,15 +526,15 @@ func (r *RPM) writeGenIndexes(h *index) {
 		h.Add(tagBugURL, EntryString(r.BugURL))
 	}
 	if len(r.Changelog) > 0 {
-		times := make([]int32, len(r.Changelog))
+		times := make([]uint32, len(r.Changelog))
 		names := make([]string, len(r.Changelog))
 		texts := make([]string, len(r.Changelog))
 		for i, e := range r.Changelog {
-			times[i] = int32(e.Time.Unix())
+			times[i] = uint32(e.Time.Unix()) // range checked by validateMetadata
 			names[i] = e.Author
 			texts[i] = e.Text
 		}
-		h.Add(tagChangelogTime, EntryInt32(times))
+		h.Add(tagChangelogTime, EntryUint32(times))
 		h.Add(tagChangelogName, EntryStringSlice(names))
 		h.Add(tagChangelogText, EntryStringSlice(texts))
 	}
@@ -653,18 +688,18 @@ func (r *RPM) writeFile(f RPMFile) error {
 		r.filelinktos = append(r.filelinktos, "")
 		links = 2
 	case f.Mode&0120000 == 0120000: //  symlink
-		r.filesizes = append(r.filesizes, uint32(len(f.Body)))
+		r.filesizes = append(r.filesizes, fileSize32(len(f.Body)))
 		v6size = uint64(len(f.Body))
 		r.filedigests = append(r.filedigests, "")
 		r.filelinktos = append(r.filelinktos, string(f.Body))
 	default: // regular file
 		f.Mode = f.Mode | 0100000
-		r.filesizes = append(r.filesizes, uint32(len(f.Body)))
+		r.filesizes = append(r.filesizes, fileSize32(len(f.Body)))
 		v6size = uint64(len(f.Body))
 		r.filedigests = append(r.filedigests, fmt.Sprintf("%x", sha256.Sum256(f.Body)))
 		r.filelinktos = append(r.filelinktos, "")
 	}
-	r.filemodes = append(r.filemodes, uint16(f.Mode))
+	r.filemodes = append(r.filemodes, uint16(f.Mode)) // range checked by validateFile
 	if r.v6 != nil {
 		r.v6.addFile(v6size, mimeType(f))
 	}
@@ -692,7 +727,7 @@ func (r *RPM) writePayload(f RPMFile, links int) error {
 	if _, err := r.cpio.Write(f.Body); err != nil {
 		return fmt.Errorf("failed to write payload file content: %w", err)
 	}
-	r.payloadSize += uint(len(f.Body))
+	r.payloadSize += uint64(len(f.Body))
 	return nil
 }
 
@@ -707,6 +742,116 @@ func (r *RPM) writePayloadV6(f RPMFile) error {
 	if err := r.v6.writeEntry(len(r.basenames)-1, content); err != nil {
 		return fmt.Errorf("failed to write payload file: %w", err)
 	}
-	r.payloadSize += uint(len(content))
+	r.payloadSize += uint64(len(content))
+	return nil
+}
+
+// fileSize32 converts a size to the 32 bit FILESIZES tag. The v4 format rejects
+// larger files in validateFile; for v6, which has its own 64 bit tag, the value is
+// unused.
+func fileSize32(n int) uint32 {
+	return uint32(min(uint64(n), math.MaxUint32))
+}
+
+// addInstalledSize adds the total installed size of a v4 package: the 32 bit SIZE
+// tag, or the 64 bit LONGSIZE tag when it does not fit, as rpmbuild does.
+func addInstalledSize(h *index, size uint64) {
+	if size > math.MaxUint32 {
+		h.Add(tagLongSize, EntryUint64([]uint64{size}))
+		return
+	}
+	h.Add(tagSize, EntryUint32([]uint32{uint32(size)}))
+}
+
+// addSignatureSizes adds the sizes of the header plus payload and of the
+// uncompressed payload to a v4 signature header, using the 64 bit LONGSIGSIZE and
+// LONGARCHIVESIZE tags when they do not fit in 32 bits, as rpmbuild does.
+func addSignatureSizes(s *index, headerAndPayload, archive uint64) {
+	if headerAndPayload > math.MaxUint32 {
+		s.Add(sigLongSize, EntryUint64([]uint64{headerAndPayload}))
+	} else {
+		s.Add(sigSize, EntryUint32([]uint32{uint32(headerAndPayload)}))
+	}
+	if archive > math.MaxUint32 {
+		s.Add(sigLongArchiveSize, EntryUint64([]uint64{archive}))
+	} else {
+		s.Add(sigPayloadSize, EntryUint32([]uint32{uint32(archive)}))
+	}
+}
+
+func largeFilesRequire() *Relation {
+	return &Relation{
+		Name:    "rpmlib(LargeFiles)",
+		Version: "4.12.0-1",
+		Sense:   SenseRPMLIB | SenseLess | SenseEqual,
+	}
+}
+
+// validateFile checks that f can be represented in the rpm file indexes.
+func (r *RPM) validateFile(f RPMFile) error {
+	switch {
+	case !path.IsAbs(f.Name) || path.Clean(f.Name) != f.Name:
+		return fmt.Errorf("%w: name %q is not a clean absolute path", ErrInvalidFile, f.Name)
+	case hasNUL(f.Name), hasNUL(f.Owner), hasNUL(f.Group):
+		return fmt.Errorf("%w: %q has an embedded NUL byte", ErrInvalidFile, f.Name)
+	case f.Mode > maxMode:
+		return fmt.Errorf("%w: %q has mode %#o which does not fit in 16 bits", ErrInvalidFile, f.Name, f.Mode)
+	case f.Mode&0120000 == 0120000 && f.Mode&040000 == 0 && bytes.IndexByte(f.Body, 0) >= 0:
+		return fmt.Errorf("%w: symlink %q has an embedded NUL byte in its target", ErrInvalidFile, f.Name)
+	case r.v6 == nil && uint64(len(f.Body)) > maxV4FileSize:
+		return fmt.Errorf("%w: %q is %d bytes, the v4 format supports files up to 4 GiB - 1 (use FormatV6)",
+			ErrInvalidFile, f.Name, len(f.Body))
+	}
+	return nil
+}
+
+// validateMetadata checks that the package metadata can be represented in the header.
+func (r *RPM) validateMetadata() error {
+	strs := []string{
+		r.Name, r.Summary, r.Description, r.Version, r.Release, r.Arch, r.OS, r.Vendor,
+		r.URL, r.Packager, r.Group, r.Licence, r.BuildHost, r.Distribution, r.BugURL,
+		r.prein, r.postin, r.preun, r.postun, r.pretrans, r.posttrans, r.verifyscript,
+	}
+	strs = append(strs, r.Prefixes...)
+	for _, e := range r.Changelog {
+		strs = append(strs, e.Author, e.Text)
+	}
+	for _, s := range strs {
+		if hasNUL(s) {
+			return fmt.Errorf("%w: value %q has an embedded NUL byte", ErrInvalidMetadata, s)
+		}
+	}
+	for _, rels := range []Relations{
+		r.Provides, r.Obsoletes, r.Suggests, r.Recommends, r.Requires, r.Conflicts, r.Enhances, r.Supplements,
+	} {
+		for _, rel := range rels {
+			if rel == nil {
+				return fmt.Errorf("%w: nil relation", ErrInvalidMetadata)
+			}
+			if hasNUL(rel.Name) || hasNUL(rel.Version) {
+				return fmt.Errorf("%w: relation %q has an embedded NUL byte", ErrInvalidMetadata, rel.Name)
+			}
+		}
+	}
+	if !r.BuildTime.IsZero() {
+		if err := checkTime32("build time", r.BuildTime); err != nil {
+			return err
+		}
+	}
+	for _, e := range r.Changelog {
+		if err := checkTime32("changelog time", e.Time); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasNUL(s string) bool { return strings.IndexByte(s, 0) >= 0 }
+
+// checkTime32 checks that t fits the unsigned 32 bit time rpm stores in headers.
+func checkTime32(what string, t time.Time) error {
+	if u := t.Unix(); u < 0 || u > math.MaxUint32 {
+		return fmt.Errorf("%w: %s %v is outside 1970..2106, the range of a 32 bit rpm time", ErrInvalidMetadata, what, t)
+	}
 	return nil
 }

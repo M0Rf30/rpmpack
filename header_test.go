@@ -15,7 +15,10 @@
 package rpmpack
 
 import (
+	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -109,5 +112,16 @@ func TestIndex(t *testing.T) {
 		"0000003e00000007ffffffd000000010" // eigen header value
 	if d := cmp.Diff(want, fmt.Sprintf("%x", got)); d != "" {
 		t.Errorf("i.Bytes() unexpected value (want-> got): \n%s", d)
+	}
+}
+
+func TestIndexTooLarge(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("count does not fit an int")
+	}
+	i := newIndex(immutable)
+	i.Add(tagName, IndexEntry{rpmtype: typeBinary, count: math.MaxInt32 + 1})
+	if _, err := i.Bytes(); !errors.Is(err, ErrHeaderTooLarge) {
+		t.Errorf("Bytes error = %v, want ErrHeaderTooLarge", err)
 	}
 }

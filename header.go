@@ -17,9 +17,15 @@ package rpmpack
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 )
+
+// ErrHeaderTooLarge is returned when a header does not fit the 31 bit offsets and
+// counts of the rpm header format.
+var ErrHeaderTooLarge = errors.New("rpm header too large")
 
 const (
 	signatures = 0x3e
@@ -166,9 +172,16 @@ func (i *index) Bytes() ([]byte, error) {
 	offsets := make([]int, len(tags))
 	for ii, tag := range tags {
 		e := i.entries[tag]
+		if e.count > math.MaxInt32 {
+			return nil, fmt.Errorf("%w: tag %d has %d items", ErrHeaderTooLarge, tag, e.count)
+		}
 		pad(entryData, e.rpmtype, entryData.Len())
 		offsets[ii] = entryData.Len()
 		entryData.Write(e.data)
+		// keep room for the 16 byte eigenHeader appended below
+		if entryData.Len() > math.MaxInt32-0x10 {
+			return nil, fmt.Errorf("%w: data region is over %d bytes at tag %d", ErrHeaderTooLarge, math.MaxInt32-0x10, tag)
+		}
 	}
 	entryData.Write(i.eigenHeader().data)
 

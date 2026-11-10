@@ -19,14 +19,16 @@ package rpmpack
 const (
 	tagHeaderI18NTable = 0x64 // 100
 	// Signature tags are obiously overlapping regular header tags..
-	sigRSA         = 0x010c // 256
-	sigSHA256      = 0x0111 // 273
-	sigOpenPGP     = 0x0116 // 278 (v6 only)
-	sigSHA3256     = 0x0117 // 279 (v6 only)
-	sigReserved    = 0x03e7 // 999 (v6 only)
-	sigSize        = 0x03e8 // 1000
-	sigPGP         = 0x03ea // 1002
-	sigPayloadSize = 0x03ef // 1007
+	sigRSA             = 0x010c // 256
+	sigSHA256          = 0x0111 // 273
+	sigOpenPGP         = 0x0116 // 278 (v6 only)
+	sigSHA3256         = 0x0117 // 279 (v6 only)
+	sigReserved        = 0x03e7 // 999 (v6 only)
+	sigLongSize        = 0x010e // 270
+	sigLongArchiveSize = 0x010f // 271
+	sigSize            = 0x03e8 // 1000
+	sigPGP             = 0x03ea // 1002
+	sigPayloadSize     = 0x03ef // 1007
 
 	// https://github.com/rpm-software-management/rpm/blob/92eadae94c48928bca90693ad63c46ceda37d81f/rpmio/rpmpgp.h#L258
 	hashAlgoSHA256 = 0x0008 // 8

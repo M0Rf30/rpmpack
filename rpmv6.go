@@ -154,11 +154,7 @@ func mimeType(f RPMFile) string {
 // rpm 6 adds to a v6 package.
 func (r *RPM) v6Requires() Relations {
 	reqs := append(Relations{}, r.Requires...)
-	reqs.addIfMissing(&Relation{
-		Name:    "rpmlib(LargeFiles)",
-		Version: "4.12.0-1",
-		Sense:   SenseRPMLIB | SenseLess | SenseEqual,
-	})
+	reqs.addIfMissing(largeFilesRequire())
 
 	var compressorDep *Relation
 	switch r.Compressor {
